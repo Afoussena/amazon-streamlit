@@ -26,17 +26,10 @@ def clean_amazon_url(url):
     return f"https://www.amazon.{domain}/dp/{asin}", domain, asin
 
 def extract_product_data(asin, domain, include_reviews=True, review_counts=None):
-    params = {
-        "engine": "amazon",
-        "amazon_domain": f"amazon.{domain}",
-        "search_term": asin
-    }
-    data = get_serpapi_data(params)
-
-    item = data.get("organic_results", [{}])[0]
+    # We no longer use search_term = asin here
     product_data = {
-        'title': item.get("title", "N/A"),
-        'features': item.get("bullet_points", []),
+        'title': "Données non disponibles via SerpApi pour l'ASIN directement.",
+        'features': [],
         'technical_details': {},
         'customer_reviews': []
     }
@@ -60,7 +53,7 @@ def extract_product_data(asin, domain, include_reviews=True, review_counts=None)
 def main():
     st.title("🛒 Extracteur de données Amazon - SerpAPI")
 
-    mode = st.radio("Méthode de recherche", ["ASIN", "Nom du produit", "URL du produit"])
+    mode = st.radio("Méthode de recherche", ["Nom du produit", "ASIN", "URL du produit"])
     domain = st.text_input("Domaine Amazon (ex: fr, com, de)", "fr")
     include_reviews = st.checkbox("Inclure les avis clients", value=True)
 
@@ -71,29 +64,27 @@ def main():
             review_counts[star] = st.number_input(f"{star} étoile(s)", min_value=0, max_value=50, value=0)
 
     user_input = ""
-    if mode == "ASIN":
-        user_input = st.text_input("Entrez l'ASIN du produit")
-    elif mode == "Nom du produit":
+    if mode == "Nom du produit":
         user_input = st.text_input("Entrez le nom du produit")
+    elif mode == "ASIN":
+        user_input = st.text_input("Entrez l'ASIN du produit (nécessite aussi le nom pour SerpApi)")
     else:
         user_input = st.text_input("Entrez l'URL du produit Amazon")
 
-    if st.button("Extraire les données") and user_input:
+    product_name = st.text_input("Nom du produit (utilisé pour trouver l'ASIN via SerpApi)")
+
+    if st.button("Extraire les données") and user_input and product_name:
         try:
-            if mode == "URL du produit":
-                _, domain, asin = clean_amazon_url(user_input.strip())
-            elif mode == "Nom du produit":
-                search_params = {
-                    "engine": "amazon",
-                    "amazon_domain": f"amazon.{domain}",
-                    "search_term": user_input
-                }
-                result = get_serpapi_data(search_params)
-                asin = result.get("organic_results", [{}])[0].get("asin", "")
-                if not asin:
-                    raise Exception("Produit non trouvé.")
-            else:
-                asin = user_input.strip()
+            # Cherche l'ASIN via nom du produit
+            search_params = {
+                "engine": "amazon",
+                "amazon_domain": f"amazon.{domain}",
+                "search_term": product_name
+            }
+            result = get_serpapi_data(search_params)
+            asin = result.get("organic_results", [{}])[0].get("asin", "")
+            if not asin:
+                raise Exception("ASIN introuvable pour ce produit.")
 
             data = extract_product_data(asin, domain, include_reviews, review_counts)
 
