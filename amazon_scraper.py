@@ -1,22 +1,18 @@
 import requests
 from bs4 import BeautifulSoup
-import random
 import streamlit as st
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote_plus
+import pandas as pd
+import io
 
-HEADERS_LIST = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Safari/605.1.15',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
-]
-
-def get_soup(url):
-    headers = {'User-Agent': random.choice(HEADERS_LIST)}
-    response = requests.get(url, headers=headers)
+def get_serpapi_data(params, api_key):
+    url = "https://serpapi.com/search"
+    params["api_key"] = api_key
+    response = requests.get(url, params=params)
     if response.status_code != 200:
-        raise Exception(f"Erreur de requête ({response.status_code}) pour l'URL: {url}")
-    return BeautifulSoup(response.text, 'html.parser')
+        raise Exception(f"Erreur {response.status_code} depuis SerpApi: {response.text}")
+    return response.json()
 
 def clean_amazon_url(url):
     match = re.search(r"/dp/([A-Z0-9]{10})", url)
@@ -27,40 +23,42 @@ def clean_amazon_url(url):
     domain = parsed.netloc.replace("www.amazon.", "")
     return f"https://www.amazon.{domain}/dp/{asin}", domain, asin
 
-def extract_reviews(domain, asin, max_reviews=10):
-    reviews = []
-    url = f"https://www.amazon.{domain}/product-reviews/{asin}"
-    soup = get_soup(url)
-    review_elements = soup.select(".review-text-content span")
-    for review in review_elements[:max_reviews]:
-        text = review.get_text(strip=True)
-        if text:
-            reviews.append(text)
-    return reviews
+def extract_product_data(asin, domain, api_key, include_reviews=True):
+    params = {
+        "engine": "amazon_product",
+        "amazon_domain": f"amazon.{domain}",
+        "asin": asin
+    }
+    data = get_serpapi_data(params, api_key)
 
-def extract_product_data_from_url(url, domain, asin, include_reviews=True):
-    soup = get_soup(url)
-
-    data = {
-        'title': soup.select_one('#productTitle').get_text(strip=True) if soup.select_one('#productTitle') else 'N/A',
-        'features': [li.get_text(strip=True) for li in soup.select('#feature-bullets li') if li.get_text(strip=True)],
-        'technical_details': {},
+    product_data = {
+        'title': data.get("title", "N/A"),
+        'features': data.get("feature_bullets", []),
+        'technical_details': data.get("specifications", {}),
         'customer_reviews': []
     }
-    for table in soup.select("table#productDetails_techSpec_section_1, table#productDetails_detailBullets_sections1"):
-        for row in table.select("tr"):
-            th = row.select_one("th")
-            td = row.select_one("td")
-            if th and td:
-                data['technical_details'][th.get_text(strip=True)] = td.get_text(strip=True)
 
     if include_reviews:
-        data['customer_reviews'] = extract_reviews(domain, asin)
+        reviews_params = {
+            "engine": "amazon_reviews",
+            "amazon_domain": f"amazon.{domain}",
+            "asin": asin,
+            "review_type": "all",
+            "sort_by": "recent"
+        }
+        reviews_data = get_serpapi_data(reviews_params, api_key)
+        for r in reviews_data.get("reviews", [])[:10]:
+            product_data['customer_reviews'].append(r.get("body", ""))
 
-    return data
+    return product_data
 
 def main():
-    st.title("🛒 Extracteur de données Amazon - V3")
+    st.title("🛒 Extracteur de données Amazon - SerpAPI")
+    api_key = st.text_input("Entrez votre clé API SerpApi", type="password")
+    if not api_key:
+        st.warning("Veuillez entrer votre clé API SerpApi pour commencer.")
+        return
+
     mode = st.radio("Méthode de recherche", ["ASIN", "Nom du produit", "URL du produit"])
     domain = st.text_input("Domaine Amazon (ex: fr, com, de)", "fr")
     include_reviews = st.checkbox("Inclure les avis clients", value=True)
@@ -76,23 +74,21 @@ def main():
     if st.button("Extraire les données") and user_input:
         try:
             if mode == "URL du produit":
-                clean_url, domain, asin = clean_amazon_url(user_input.strip())
-                data = extract_product_data_from_url(clean_url, domain, asin, include_reviews)
+                _, domain, asin = clean_amazon_url(user_input.strip())
+            elif mode == "Nom du produit":
+                search_params = {
+                    "engine": "amazon",
+                    "amazon_domain": f"amazon.{domain}",
+                    "search_term": user_input
+                }
+                result = get_serpapi_data(search_params, api_key)
+                asin = result.get("organic_results", [{}])[0].get("asin", "")
+                if not asin:
+                    raise Exception("Produit non trouvé.")
             else:
-                domain = domain.lower().strip().replace("https://", "").replace("http://", "").replace("www.amazon.", "")
-                asin = user_input
-                if mode == "Nom du produit":
-                    query = user_input.replace(" ", "+")
-                    search_url = f"https://www.amazon.{domain}/s?k={query}"
-                    soup = get_soup(search_url)
-                    result = soup.select_one("div.s-result-item[data-asin]")
-                    if result and result['data-asin']:
-                        asin = result['data-asin']
-                        st.success(f"ASIN trouvé : {asin}")
-                    else:
-                        raise Exception("Aucun produit trouvé pour la requête.")
-                url = f"https://www.amazon.{domain}/dp/{asin}"
-                data = extract_product_data_from_url(url, domain, asin, include_reviews)
+                asin = user_input.strip()
+
+            data = extract_product_data(asin, domain, api_key, include_reviews)
 
             st.subheader("Titre")
             st.write(data['title'])
@@ -109,6 +105,22 @@ def main():
                 st.subheader("Avis clients")
                 for i, review in enumerate(data['customer_reviews'], 1):
                     st.markdown(f"{i}. {review}")
+
+            # Export CSV
+            export_data = {
+                "Titre": [data['title']],
+                "Caractéristiques": [" | ".join(data['features'])],
+                "Détails techniques": [" | ".join([f"{k}: {v}" for k, v in data['technical_details'].items()])],
+                "Avis clients": [" | ".join(data['customer_reviews'])]
+            }
+            df_export = pd.DataFrame(export_data)
+            csv = df_export.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Télécharger les données en CSV",
+                data=csv,
+                file_name=f"amazon_{asin}.csv",
+                mime='text/csv'
+            )
 
         except Exception as e:
             st.error(str(e))
