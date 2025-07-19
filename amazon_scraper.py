@@ -6,9 +6,11 @@ from urllib.parse import urlparse, quote_plus
 import pandas as pd
 import io
 
-def get_serpapi_data(params, api_key):
+API_KEY = "9490822339bbc53376b0590110af80297706150008607ce1cfed5083865b4a74"
+
+def get_serpapi_data(params):
     url = "https://serpapi.com/search"
-    params["api_key"] = api_key
+    params["api_key"] = API_KEY
     response = requests.get(url, params=params)
     if response.status_code != 200:
         raise Exception(f"Erreur {response.status_code} depuis SerpApi: {response.text}")
@@ -23,45 +25,50 @@ def clean_amazon_url(url):
     domain = parsed.netloc.replace("www.amazon.", "")
     return f"https://www.amazon.{domain}/dp/{asin}", domain, asin
 
-def extract_product_data(asin, domain, api_key, include_reviews=True):
+def extract_product_data(asin, domain, include_reviews=True, review_counts=None):
     params = {
-        "engine": "amazon_product",
+        "engine": "amazon",
         "amazon_domain": f"amazon.{domain}",
-        "asin": asin
+        "search_term": asin
     }
-    data = get_serpapi_data(params, api_key)
+    data = get_serpapi_data(params)
 
+    item = data.get("organic_results", [{}])[0]
     product_data = {
-        'title': data.get("title", "N/A"),
-        'features': data.get("feature_bullets", []),
-        'technical_details': data.get("specifications", {}),
+        'title': item.get("title", "N/A"),
+        'features': item.get("bullet_points", []),
+        'technical_details': {},
         'customer_reviews': []
     }
 
-    if include_reviews:
-        reviews_params = {
-            "engine": "amazon_reviews",
-            "amazon_domain": f"amazon.{domain}",
-            "asin": asin,
-            "review_type": "all",
-            "sort_by": "recent"
-        }
-        reviews_data = get_serpapi_data(reviews_params, api_key)
-        for r in reviews_data.get("reviews", [])[:10]:
-            product_data['customer_reviews'].append(r.get("body", ""))
+    if include_reviews and review_counts:
+        for stars, count in review_counts.items():
+            reviews_params = {
+                "engine": "amazon_reviews",
+                "amazon_domain": f"amazon.{domain}",
+                "asin": asin,
+                "review_type": "ratings",
+                "filter_by_star": f"{stars}_star",
+                "sort_by": "recent"
+            }
+            reviews_data = get_serpapi_data(reviews_params)
+            for r in reviews_data.get("reviews", [])[:count]:
+                product_data['customer_reviews'].append(f"[{stars}⭐] {r.get('body', '')}")
 
     return product_data
 
 def main():
     st.title("🛒 Extracteur de données Amazon - SerpAPI")
-    api_key = st.text_input("Entrez votre clé API SerpApi", type="password")
-    if not api_key:
-        st.warning("Veuillez entrer votre clé API SerpApi pour commencer.")
-        return
 
     mode = st.radio("Méthode de recherche", ["ASIN", "Nom du produit", "URL du produit"])
     domain = st.text_input("Domaine Amazon (ex: fr, com, de)", "fr")
     include_reviews = st.checkbox("Inclure les avis clients", value=True)
+
+    review_counts = {}
+    if include_reviews:
+        st.markdown("**Nombre d'avis à extraire par type :**")
+        for star in range(5, 0, -1):
+            review_counts[star] = st.number_input(f"{star} étoile(s)", min_value=0, max_value=50, value=0)
 
     user_input = ""
     if mode == "ASIN":
@@ -81,14 +88,14 @@ def main():
                     "amazon_domain": f"amazon.{domain}",
                     "search_term": user_input
                 }
-                result = get_serpapi_data(search_params, api_key)
+                result = get_serpapi_data(search_params)
                 asin = result.get("organic_results", [{}])[0].get("asin", "")
                 if not asin:
                     raise Exception("Produit non trouvé.")
             else:
                 asin = user_input.strip()
 
-            data = extract_product_data(asin, domain, api_key, include_reviews)
+            data = extract_product_data(asin, domain, include_reviews, review_counts)
 
             st.subheader("Titre")
             st.write(data['title'])
