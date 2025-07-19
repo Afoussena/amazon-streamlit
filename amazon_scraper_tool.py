@@ -62,7 +62,7 @@ def extract_product_data_from_url(url, domain, review_limits):
     return data
 
 def main():
-    st.title("🛒 Extracteur de données Amazon")
+    st.title("🛒 Extracteur de données Amazon - V2")
     mode = st.radio("Méthode de recherche", ["ASIN", "Nom du produit", "URL du produit"])
     domain = st.text_input("Domaine Amazon (ex: fr, com, de)", "fr")
 
