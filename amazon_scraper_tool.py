@@ -17,21 +17,30 @@ def get_soup(url):
         raise Exception(f"Erreur de requête ({response.status_code}) pour l'URL: {url}")
     return BeautifulSoup(response.text, 'html.parser')
 
-def extract_reviews_by_rating(soup, star, max_count):
+def extract_reviews_by_rating(domain, asin, star, max_count):
     reviews = []
-    for review in soup.select(".review"):
-        rating_el = review.select_one(".review-rating")
-        text_el = review.select_one(".review-text-content span")
-        if rating_el and text_el and f"{star}.0" in rating_el.get_text():
-            text = text_el.get_text(strip=True)
-            if text:
-                reviews.append(text)
-        if len(reviews) >= max_count:
+    page = 1
+    while len(reviews) < max_count:
+        url = f"https://www.amazon.{domain}/product-reviews/{asin}/?filterByStar={star}_star&pageNumber={page}"
+        soup = get_soup(url)
+        review_elements = soup.select(".review")
+        if not review_elements:
             break
+        for review in review_elements:
+            text_el = review.select_one(".review-text-content span")
+            if text_el:
+                text = text_el.get_text(strip=True)
+                reviews.append(text)
+                if len(reviews) >= max_count:
+                    break
+        page += 1
     return reviews
 
-def extract_product_data_from_url(url, review_limits):
+def extract_product_data_from_url(url, domain, review_limits):
     soup = get_soup(url)
+    asin_match = re.search(r"/dp/([A-Z0-9]{10})", url)
+    asin = asin_match.group(1) if asin_match else None
+
     data = {
         'title': soup.select_one('#productTitle').get_text(strip=True) if soup.select_one('#productTitle') else 'N/A',
         'features': [li.get_text(strip=True) for li in soup.select('#feature-bullets li') if li.get_text(strip=True)],
@@ -45,9 +54,10 @@ def extract_product_data_from_url(url, review_limits):
             if th and td:
                 data['technical_details'][th.get_text(strip=True)] = td.get_text(strip=True)
 
-    for star in range(5, 0, -1):
-        reviews = extract_reviews_by_rating(soup, star, review_limits.get(star, 0))
-        data['customer_reviews'].extend([f"{star}★: {rev}" for rev in reviews])
+    if asin:
+        for star in range(5, 0, -1):
+            reviews = extract_reviews_by_rating(domain, asin, star, review_limits.get(star, 0))
+            data['customer_reviews'].extend([f"{star}★: {rev}" for rev in reviews])
 
     return data
 
@@ -73,7 +83,7 @@ def main():
         try:
             if mode == "URL du produit":
                 url = user_input.strip()
-                data = extract_product_data_from_url(url, review_limits)
+                data = extract_product_data_from_url(url, domain, review_limits)
             else:
                 domain = domain.lower().strip().replace("https://", "").replace("http://", "").replace("www.amazon.", "")
                 asin = user_input
@@ -88,7 +98,7 @@ def main():
                     else:
                         raise Exception("Aucun produit trouvé pour la requête.")
                 url = f"https://www.amazon.{domain}/dp/{asin}"
-                data = extract_product_data_from_url(url, review_limits)
+                data = extract_product_data_from_url(url, domain, review_limits)
 
             st.subheader("Titre")
             st.write(data['title'])
