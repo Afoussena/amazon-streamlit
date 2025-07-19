@@ -16,8 +16,8 @@ HEADERS = {
 def get_serpapi_data(params):
     url = "https://serpapi.com/search"
     params["api_key"] = API_KEY
-    if not params.get("search_term") and not params.get("asin"):
-        raise ValueError("Paramètre 'search_term' ou 'asin' requis pour l'appel à SerpApi.")
+    if not params.get("search_term") and not params.get("asin") and params.get("engine") != "amazon_reviews":
+        raise ValueError("Paramètre 'search_term', 'asin' ou un engine valide requis pour l'appel à SerpApi.")
     response = requests.get(url, params=params)
     if response.status_code != 200:
         raise Exception(f"Erreur {response.status_code} depuis SerpApi: {response.text}")
