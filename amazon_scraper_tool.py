@@ -2,15 +2,13 @@ import requests
 from bs4 import BeautifulSoup
 import random
 import streamlit as st
+import re
 
 HEADERS_LIST = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Safari/605.1.15',
     'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
 ]
-
-BASE_URL = "https://www.amazon.{domain}/dp/{asin}"
-SEARCH_URL = "https://www.amazon.{domain}/s?k={query}"
 
 def get_soup(url):
     headers = {'User-Agent': random.choice(HEADERS_LIST)}
@@ -19,18 +17,20 @@ def get_soup(url):
         raise Exception(f"Erreur de requête ({response.status_code}) pour l'URL: {url}")
     return BeautifulSoup(response.text, 'html.parser')
 
-def get_asin_from_query(query, domain="fr"):
-    domain = domain.lower().strip().replace("https://", "").replace("http://", "").replace("www.amazon.", "")
-    url = SEARCH_URL.format(domain=domain, query=query.replace(" ", "+"))
-    soup = get_soup(url)
-    result = soup.select_one("div.s-result-item[data-asin]")
-    if result and result['data-asin']:
-        return result['data-asin']
-    raise Exception("Aucun produit trouvé pour la requête.")
+def extract_reviews_by_rating(soup, star, max_count):
+    reviews = []
+    for review in soup.select(".review"):
+        rating_el = review.select_one(".review-rating")
+        text_el = review.select_one(".review-text-content span")
+        if rating_el and text_el and f"{star}.0" in rating_el.get_text():
+            text = text_el.get_text(strip=True)
+            if text:
+                reviews.append(text)
+        if len(reviews) >= max_count:
+            break
+    return reviews
 
-def extract_product_data(asin, domain="fr"):
-    domain = domain.lower().strip().replace("https://", "").replace("http://", "").replace("www.amazon.", "")
-    url = BASE_URL.format(domain=domain, asin=asin)
+def extract_product_data_from_url(url, review_limits):
     soup = get_soup(url)
     data = {
         'title': soup.select_one('#productTitle').get_text(strip=True) if soup.select_one('#productTitle') else 'N/A',
@@ -44,30 +44,52 @@ def extract_product_data(asin, domain="fr"):
             td = row.select_one("td")
             if th and td:
                 data['technical_details'][th.get_text(strip=True)] = td.get_text(strip=True)
-    for review in soup.select(".review-text-content span"):
-        text = review.get_text(strip=True)
-        if text:
-            data['customer_reviews'].append(text)
+
+    for star in range(5, 0, -1):
+        reviews = extract_reviews_by_rating(soup, star, review_limits.get(star, 0))
+        data['customer_reviews'].extend([f"{star}★: {rev}" for rev in reviews])
+
     return data
 
 def main():
     st.title("🛒 Extracteur de données Amazon")
-    mode = st.radio("Méthode de recherche", ["ASIN", "Nom du produit"])
+    mode = st.radio("Méthode de recherche", ["ASIN", "Nom du produit", "URL du produit"])
     domain = st.text_input("Domaine Amazon (ex: fr, com, de)", "fr")
+
+    review_limits = {}
+    with st.expander("Nombre d'avis à extraire par note"):
+        for i in range(5, 0, -1):
+            review_limits[i] = st.number_input(f"Avis {i} étoiles", min_value=0, max_value=100, value=2, step=1)
 
     user_input = ""
     if mode == "ASIN":
         user_input = st.text_input("Entrez l'ASIN du produit")
-    else:
+    elif mode == "Nom du produit":
         user_input = st.text_input("Entrez le nom du produit")
+    else:
+        user_input = st.text_input("Entrez l'URL du produit Amazon")
 
     if st.button("Extraire les données") and user_input:
         try:
-            asin = user_input
-            if mode != "ASIN":
-                asin = get_asin_from_query(user_input, domain)
-                st.success(f"ASIN trouvé : {asin}")
-            data = extract_product_data(asin, domain)
+            if mode == "URL du produit":
+                url = user_input.strip()
+                data = extract_product_data_from_url(url, review_limits)
+            else:
+                domain = domain.lower().strip().replace("https://", "").replace("http://", "").replace("www.amazon.", "")
+                asin = user_input
+                if mode == "Nom du produit":
+                    query = user_input.replace(" ", "+")
+                    search_url = f"https://www.amazon.{domain}/s?k={query}"
+                    soup = get_soup(search_url)
+                    result = soup.select_one("div.s-result-item[data-asin]")
+                    if result and result['data-asin']:
+                        asin = result['data-asin']
+                        st.success(f"ASIN trouvé : {asin}")
+                    else:
+                        raise Exception("Aucun produit trouvé pour la requête.")
+                url = f"https://www.amazon.{domain}/dp/{asin}"
+                data = extract_product_data_from_url(url, review_limits)
+
             st.subheader("Titre")
             st.write(data['title'])
 
