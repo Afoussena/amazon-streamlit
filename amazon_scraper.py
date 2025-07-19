@@ -8,6 +8,11 @@ import io
 
 API_KEY = "9490822339bbc53376b0590110af80297706150008607ce1cfed5083865b4a74"
 
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+    "Accept-Language": "fr-FR,fr;q=0.9"
+}
+
 def get_serpapi_data(params):
     url = "https://serpapi.com/search"
     params["api_key"] = API_KEY
@@ -16,78 +21,86 @@ def get_serpapi_data(params):
         raise Exception(f"Erreur {response.status_code} depuis SerpApi: {response.text}")
     return response.json()
 
-def clean_amazon_url(url):
+def extract_asin_from_url(url):
     match = re.search(r"/dp/([A-Z0-9]{10})", url)
     if not match:
-        raise ValueError("URL Amazon invalide ou ASIN non trouvé.")
-    asin = match.group(1)
+        raise ValueError("ASIN introuvable dans l'URL.")
     parsed = urlparse(url)
     domain = parsed.netloc.replace("www.amazon.", "")
-    return f"https://www.amazon.{domain}/dp/{asin}", domain, asin
+    return match.group(1), domain
 
-def extract_product_data(asin, domain, include_reviews=True, review_counts=None):
-    product_data = {
-        'title': f"Données extraites via l'ASIN {asin}.",
-        'features': [],
-        'technical_details': {},
+def extract_asin_from_name(name, domain):
+    params = {
+        "engine": "amazon",
+        "amazon_domain": f"amazon.{domain}",
+        "search_term": name
+    }
+    data = get_serpapi_data(params)
+    asin = data.get("organic_results", [{}])[0].get("asin", "")
+    return asin
+
+def extract_amazon_data_via_serpapi(asin, domain):
+    params = {
+        "engine": "amazon",
+        "amazon_domain": f"amazon.{domain}",
+        "asin": asin
+    }
+    data = get_serpapi_data(params)
+    result = data.get("product_results", {})
+    return {
+        'title': result.get("title", "N/A"),
+        'features': result.get("feature_bullets", []),
+        'technical_details': result.get("technical_specifications", {}),
         'customer_reviews': []
     }
 
-    if include_reviews and review_counts:
-        for stars, count in review_counts.items():
-            reviews_params = {
-                "engine": "amazon_reviews",
-                "amazon_domain": f"amazon.{domain}",
-                "asin": asin,
-                "review_type": "ratings",
-                "filter_by_star": f"{stars}_star",
-                "sort_by": "recent"
-            }
-            reviews_data = get_serpapi_data(reviews_params)
-            for r in reviews_data.get("reviews", [])[:count]:
-                product_data['customer_reviews'].append(f"[{stars}⭐] {r.get('body', '')}")
-
-    return product_data
+def extract_reviews_from_serpapi(asin, domain, review_counts):
+    reviews = []
+    for stars, count in review_counts.items():
+        if count == 0:
+            continue
+        params = {
+            "engine": "amazon_reviews",
+            "amazon_domain": f"amazon.{domain}",
+            "asin": asin,
+            "review_type": "ratings",
+            "filter_by_star": f"{stars}_star",
+            "sort_by": "recent"
+        }
+        try:
+            data = get_serpapi_data(params)
+            reviews.extend([f"[{stars}⭐] {r.get('body', '')}" for r in data.get("reviews", [])[:count]])
+        except:
+            continue
+    return reviews
 
 def main():
-    st.title("🛒 Extracteur de données Amazon - SerpAPI")
+    st.title("🛒 Extracteur Amazon - Version SerpAPI")
 
-    mode = st.radio("Méthode de recherche", ["Nom du produit", "ASIN", "URL du produit"])
-    domain = st.text_input("Domaine Amazon (ex: fr, com, de)", "fr")
+    mode = st.radio("Méthode de recherche", ["URL du produit", "Nom du produit"])
+    user_input = st.text_input("Entrez l'URL ou le nom du produit Amazon")
+    domain = st.text_input("Domaine Amazon (ex: fr, com, de)", value="fr")
     include_reviews = st.checkbox("Inclure les avis clients", value=True)
 
     review_counts = {}
     if include_reviews:
         st.markdown("**Nombre d'avis à extraire par type :**")
         for star in range(5, 0, -1):
-            review_counts[star] = st.number_input(f"{star} étoile(s)", min_value=0, max_value=50, value=0)
-
-    user_input = ""
-    if mode == "Nom du produit":
-        user_input = st.text_input("Entrez le nom du produit")
-    elif mode == "ASIN":
-        user_input = st.text_input("Entrez l'ASIN du produit")
-    else:
-        user_input = st.text_input("Entrez l'URL du produit Amazon")
+            review_counts[star] = st.number_input(f"{star} étoile(s)", min_value=0, max_value=10, value=0)
 
     if st.button("Extraire les données") and user_input:
         try:
-            if mode == "Nom du produit":
-                search_params = {
-                    "engine": "amazon",
-                    "amazon_domain": f"amazon.{domain}",
-                    "search_term": user_input
-                }
-                result = get_serpapi_data(search_params)
-                asin = result.get("organic_results", [{}])[0].get("asin", "")
-                if not asin:
-                    raise Exception("ASIN introuvable pour ce produit.")
-            elif mode == "URL du produit":
-                _, domain, asin = clean_amazon_url(user_input.strip())
+            if mode == "URL du produit":
+                asin, domain = extract_asin_from_url(user_input)
             else:
-                asin = user_input.strip()
+                asin = extract_asin_from_name(user_input, domain)
+                if not asin:
+                    raise Exception("ASIN introuvable pour ce nom de produit.")
 
-            data = extract_product_data(asin, domain, include_reviews, review_counts)
+            data = extract_amazon_data_via_serpapi(asin, domain)
+
+            if include_reviews:
+                data['customer_reviews'] = extract_reviews_from_serpapi(asin, domain, review_counts)
 
             st.subheader("Titre")
             st.write(data['title'])
