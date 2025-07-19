@@ -16,6 +16,8 @@ HEADERS = {
 def get_serpapi_data(params):
     url = "https://serpapi.com/search"
     params["api_key"] = API_KEY
+    if not params.get("search_term") and not params.get("asin"):
+        raise ValueError("Paramètre 'search_term' ou 'asin' requis pour l'appel à SerpApi.")
     response = requests.get(url, params=params)
     if response.status_code != 200:
         raise Exception(f"Erreur {response.status_code} depuis SerpApi: {response.text}")
@@ -30,6 +32,8 @@ def extract_asin_from_url(url):
     return match.group(1), domain
 
 def extract_asin_from_name(name, domain):
+    if not name.strip():
+        raise ValueError("Le nom du produit est vide.")
     params = {
         "engine": "amazon",
         "amazon_domain": f"amazon.{domain}",
