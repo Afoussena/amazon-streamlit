@@ -27,13 +27,25 @@ def clean_amazon_url(url):
     domain = parsed.netloc.replace("www.amazon.", "")
     return f"https://www.amazon.{domain}/dp/{asin}", domain, asin
 
-def extract_product_data_from_url(url, domain):
+def extract_reviews(domain, asin, max_reviews=10):
+    reviews = []
+    url = f"https://www.amazon.{domain}/product-reviews/{asin}"
+    soup = get_soup(url)
+    review_elements = soup.select(".review-text-content span")
+    for review in review_elements[:max_reviews]:
+        text = review.get_text(strip=True)
+        if text:
+            reviews.append(text)
+    return reviews
+
+def extract_product_data_from_url(url, domain, asin, include_reviews=True):
     soup = get_soup(url)
 
     data = {
         'title': soup.select_one('#productTitle').get_text(strip=True) if soup.select_one('#productTitle') else 'N/A',
         'features': [li.get_text(strip=True) for li in soup.select('#feature-bullets li') if li.get_text(strip=True)],
         'technical_details': {},
+        'customer_reviews': []
     }
     for table in soup.select("table#productDetails_techSpec_section_1, table#productDetails_detailBullets_sections1"):
         for row in table.select("tr"):
@@ -42,12 +54,16 @@ def extract_product_data_from_url(url, domain):
             if th and td:
                 data['technical_details'][th.get_text(strip=True)] = td.get_text(strip=True)
 
+    if include_reviews:
+        data['customer_reviews'] = extract_reviews(domain, asin)
+
     return data
 
 def main():
-    st.title("🛒 Extracteur de données Amazon - V2")
+    st.title("🛒 Extracteur de données Amazon - V3")
     mode = st.radio("Méthode de recherche", ["ASIN", "Nom du produit", "URL du produit"])
     domain = st.text_input("Domaine Amazon (ex: fr, com, de)", "fr")
+    include_reviews = st.checkbox("Inclure les avis clients", value=True)
 
     user_input = ""
     if mode == "ASIN":
@@ -61,7 +77,7 @@ def main():
         try:
             if mode == "URL du produit":
                 clean_url, domain, asin = clean_amazon_url(user_input.strip())
-                data = extract_product_data_from_url(clean_url, domain)
+                data = extract_product_data_from_url(clean_url, domain, asin, include_reviews)
             else:
                 domain = domain.lower().strip().replace("https://", "").replace("http://", "").replace("www.amazon.", "")
                 asin = user_input
@@ -76,7 +92,7 @@ def main():
                     else:
                         raise Exception("Aucun produit trouvé pour la requête.")
                 url = f"https://www.amazon.{domain}/dp/{asin}"
-                data = extract_product_data_from_url(url, domain)
+                data = extract_product_data_from_url(url, domain, asin, include_reviews)
 
             st.subheader("Titre")
             st.write(data['title'])
@@ -88,6 +104,11 @@ def main():
             st.subheader("Détails techniques")
             for k, v in data['technical_details'].items():
                 st.markdown(f"**{k}** : {v}")
+
+            if data['customer_reviews']:
+                st.subheader("Avis clients")
+                for i, review in enumerate(data['customer_reviews'], 1):
+                    st.markdown(f"{i}. {review}")
 
         except Exception as e:
             st.error(str(e))
