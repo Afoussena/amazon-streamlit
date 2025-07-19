@@ -3,6 +3,7 @@ from bs4 import BeautifulSoup
 import random
 import streamlit as st
 import re
+from urllib.parse import urlparse
 
 HEADERS_LIST = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
@@ -16,6 +17,15 @@ def get_soup(url):
     if response.status_code != 200:
         raise Exception(f"Erreur de requête ({response.status_code}) pour l'URL: {url}")
     return BeautifulSoup(response.text, 'html.parser')
+
+def clean_amazon_url(url):
+    match = re.search(r"/dp/([A-Z0-9]{10})", url)
+    if not match:
+        raise ValueError("URL Amazon invalide ou ASIN non trouvé.")
+    asin = match.group(1)
+    parsed = urlparse(url)
+    domain = parsed.netloc.replace("www.amazon.", "")
+    return f"https://www.amazon.{domain}/dp/{asin}", domain, asin
 
 def extract_reviews_by_rating(domain, asin, star, max_count):
     reviews = []
@@ -82,8 +92,8 @@ def main():
     if st.button("Extraire les données") and user_input:
         try:
             if mode == "URL du produit":
-                url = user_input.strip()
-                data = extract_product_data_from_url(url, domain, review_limits)
+                clean_url, domain, asin = clean_amazon_url(user_input.strip())
+                data = extract_product_data_from_url(clean_url, domain, review_limits)
             else:
                 domain = domain.lower().strip().replace("https://", "").replace("http://", "").replace("www.amazon.", "")
                 asin = user_input
